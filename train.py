@@ -26,7 +26,7 @@ from config import (
     DEVICE, NUM_CLASSES,
     MODEL_XCEPTION, MODEL_VIT, MODEL_EFFICIENTNET, MODEL_DISPLAY_NAMES,
     CHECKPOINT_DIR, OUTPUT_DIR, TRAINING_HISTORY_PATH,
-    BATCH_SIZE_TRAIN, WARMUP_EPOCHS, TOTAL_EPOCHS,
+    BATCH_SIZE_TRAIN, WARMUP_EPOCHS, TOTAL_EPOCHS, EARLY_STOP_PATIENCE,
     LR_HEAD, LR_BACKBONE, LR_HEAD_FT, WEIGHT_DECAY, LABEL_SMOOTHING,
 )
 from dataset import get_dataloader, DeepfakeDataset
@@ -132,9 +132,16 @@ def train_model(model_name: str, warmup_epochs: int, total_epochs: int) -> dict:
     criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
-    history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
-    best_val_acc = 0.0
-    ckpt_path = os.path.join(CHECKPOINT_DIR, f'{model_name}_best.pth')
+    history   = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
+    best_val_loss = float('inf')
+    no_improve    = 0
+    ckpt_path     = os.path.join(CHECKPOINT_DIR, f'{model_name}_best.pth')
+
+    def _record(tr_loss, tr_acc, vl_loss, vl_acc):
+        history['train_loss'].append(round(tr_loss, 4))
+        history['train_acc'].append(round(tr_acc, 2))
+        history['val_loss'].append(round(vl_loss, 4))
+        history['val_acc'].append(round(vl_acc, 2))
 
     # ── Phase 1: Warmup (head only) ──────────────────────────────────────────
     print(f'\n  [Phase 1] Warmup — head only ({warmup_epochs} epochs)')
@@ -146,51 +153,57 @@ def train_model(model_name: str, warmup_epochs: int, total_epochs: int) -> dict:
     for ep in range(warmup_epochs):
         tr_loss, tr_acc = train_epoch(model, train_loader, optimizer, criterion)
         vl_loss, vl_acc = eval_epoch(model, val_loader, criterion) if has_val else (0., tr_acc)
-        history['train_loss'].append(round(tr_loss, 4))
-        history['train_acc'].append(round(tr_acc, 2))
-        history['val_loss'].append(round(vl_loss, 4))
-        history['val_acc'].append(round(vl_acc, 2))
+        _record(tr_loss, tr_acc, vl_loss, vl_acc)
         tag = ''
-        if has_val and vl_acc >= best_val_acc:
-            best_val_acc = vl_acc
+        if has_val and vl_loss < best_val_loss:
+            best_val_loss = vl_loss
             torch.save({'model_state_dict': model.state_dict(),
-                        'val_acc': vl_acc, 'epoch': ep + 1}, ckpt_path)
+                        'val_loss': vl_loss, 'val_acc': vl_acc, 'epoch': ep + 1}, ckpt_path)
             tag = '  [saved]'
         print(f'  Ep {ep+1:2d}/{total_epochs} | '
               f'train {tr_loss:.4f}/{tr_acc:5.1f}% | '
-              f'val {vl_acc:5.1f}%{tag}')
+              f'val {vl_acc:5.1f}% (loss {vl_loss:.4f}){tag}')
 
     # ── Phase 2: Full fine-tune ───────────────────────────────────────────────
-    print(f'\n  [Phase 2] Fine-tune — full network ({fine_tune_epochs} epochs)')
+    print(f'\n  [Phase 2] Fine-tune — full network ({fine_tune_epochs} epochs, '
+          f'early-stop patience={EARLY_STOP_PATIENCE})')
+    no_improve = 0
     unfreeze_all(model)
     backbone_params, head_params = split_params(model)
     param_groups = [{'params': backbone_params, 'lr': LR_BACKBONE},
                     {'params': head_params,     'lr': LR_HEAD_FT}]
-    optimizer  = optim.AdamW(param_groups, weight_decay=WEIGHT_DECAY)
-    scheduler  = optim.lr_scheduler.CosineAnnealingLR(
+    optimizer = optim.AdamW(param_groups, weight_decay=WEIGHT_DECAY)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=fine_tune_epochs, eta_min=1e-7)
 
     for ep in range(fine_tune_epochs):
         global_ep = warmup_epochs + ep + 1
         tr_loss, tr_acc = train_epoch(model, train_loader, optimizer, criterion)
         vl_loss, vl_acc = eval_epoch(model, val_loader, criterion) if has_val else (0., tr_acc)
-        history['train_loss'].append(round(tr_loss, 4))
-        history['train_acc'].append(round(tr_acc, 2))
-        history['val_loss'].append(round(vl_loss, 4))
-        history['val_acc'].append(round(vl_acc, 2))
+        _record(tr_loss, tr_acc, vl_loss, vl_acc)
         scheduler.step()
 
         tag = ''
-        if vl_acc >= best_val_acc:
-            best_val_acc = vl_acc
+        if has_val and vl_loss < best_val_loss:
+            best_val_loss = vl_loss
+            no_improve = 0
             torch.save({'model_state_dict': model.state_dict(),
-                        'val_acc': vl_acc, 'epoch': global_ep}, ckpt_path)
+                        'val_loss': vl_loss, 'val_acc': vl_acc, 'epoch': global_ep}, ckpt_path)
             tag = '  [saved]'
+        elif has_val:
+            no_improve += 1
+            if no_improve >= EARLY_STOP_PATIENCE:
+                print(f'  Ep {global_ep:2d}/{total_epochs} | '
+                      f'train {tr_loss:.4f}/{tr_acc:5.1f}% | '
+                      f'val {vl_acc:5.1f}% (loss {vl_loss:.4f})  [early stop]')
+                break
+
         print(f'  Ep {global_ep:2d}/{total_epochs} | '
               f'train {tr_loss:.4f}/{tr_acc:5.1f}% | '
-              f'val {vl_acc:5.1f}%{tag}')
+              f'val {vl_acc:5.1f}% (loss {vl_loss:.4f}){tag}')
 
-    print(f'\n  Best val accuracy: {best_val_acc:.1f}%  ->  {ckpt_path}')
+    best_acc = max(history['val_acc']) if history['val_acc'] else 0.0
+    print(f'\n  Best val accuracy: {best_acc:.1f}%  ->  {ckpt_path}')
     del model, optimizer
     gc.collect()
     return history

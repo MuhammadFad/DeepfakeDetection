@@ -24,8 +24,10 @@ Built as an educational project comparing architecture families on binary deepfa
 | Model | Architecture | Params | Backbone |
 |-------|-------------|--------|----------|
 | XceptionNet | CNN | 22M | Depthwise separable convolutions |
-| ViT-Base/16 | Vision Transformer | 86M | 16x16 patch self-attention |
+| ViT-Small/16 | Vision Transformer | 22M | 16x16 patch self-attention |
 | EfficientNet-B4 | Hybrid | 19M | Compound-scaled MobileNet |
+
+ViT-Small is used instead of ViT-Base deliberately — Base (86M params) massively overfits on small datasets. Small (22M) matches the parameter count of the CNN models and generalises far better when data is limited.
 
 All models use **ImageNet-pretrained backbones** with randomly-initialised 2-class heads. Fine-tuning on deepfake data moves accuracy from ~50% (random head) to 85–95%+.
 
@@ -150,13 +152,13 @@ Best checkpoints are saved to `checkpoints/` and loaded automatically by `main.p
 
 | Model | Checkpoint | Status |
 |-------|-----------|--------|
-| ViT-Base/16 | `vit_base_patch16_224_best.pth` | Trained (val acc 100% on 7 images) |
+| ViT-Small/16 | `vit_small_patch16_224_best.pth` | Not yet trained — run `python train.py --model vit_small_patch16_224` |
 | XceptionNet | `xception_best.pth` | Corrupted — retrain with `python train.py --model xception` |
-| EfficientNet-B4 | `efficientnet_b4_best.pth` | Corrupted — retrain with `python train.py --model efficientnet_b4` |
+| EfficientNet-B4 | `efficientnet_b4_best.pth` | Partially trained (ep 7, val 71%) |
 
-Checkpoints are stored with **Git LFS** (the ViT checkpoint is 327 MB). All three are tracked automatically — no manual download needed after cloning.
+Checkpoints are stored with **Git LFS**. All are tracked automatically — no manual download needed after cloning.
 
-> The ViT's 100% val accuracy is on a tiny 7-image validation set and likely reflects dataset-specific compression artefacts rather than generalised deepfake detection. The Grad-CAM heatmaps in the report will show you exactly what the model is focusing on.
+> For best results run `python download_data.py --count 200` then `python train.py` to retrain all three models. The training pipeline uses early stopping so it won't overfit even with 20 epochs configured.
 
 ---
 

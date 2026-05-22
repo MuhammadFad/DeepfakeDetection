@@ -32,8 +32,9 @@ TEST_RATIO  = 0.15
 
 # Training hyper-parameters
 BATCH_SIZE_TRAIN   = 4
-WARMUP_EPOCHS      = 3      # Phase 1: train head only
-TOTAL_EPOCHS       = 10     # Phase 1 + Phase 2 combined
+WARMUP_EPOCHS      = 4      # Phase 1: train head only
+TOTAL_EPOCHS       = 20     # Phase 1 + Phase 2 combined (early stopping ends it sooner)
+EARLY_STOP_PATIENCE = 5     # Stop if val loss doesn't improve for this many epochs
 LR_HEAD            = 1e-3   # Phase 1 head LR
 LR_BACKBONE        = 1e-5   # Phase 2 backbone LR (differential)
 LR_HEAD_FT         = 1e-4   # Phase 2 head LR (differential)
@@ -42,12 +43,12 @@ LABEL_SMOOTHING    = 0.1
 
 # Model identifiers (timm names)
 MODEL_XCEPTION = 'xception'
-MODEL_VIT = 'vit_base_patch16_224'
+MODEL_VIT = 'vit_small_patch16_224'   # Small (22M) beats Base (86M) on small datasets
 MODEL_EFFICIENTNET = 'efficientnet_b4'
 
 MODEL_DISPLAY_NAMES = {
     MODEL_XCEPTION: 'XceptionNet (CNN)',
-    MODEL_VIT: 'Vision Transformer (ViT)',
+    MODEL_VIT: 'ViT-Small/16 (Transformer)',
     MODEL_EFFICIENTNET: 'EfficientNet-B4 (Hybrid)',
 }
 

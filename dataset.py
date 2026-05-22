@@ -1,14 +1,9 @@
 """
-DeepfakeDataset — supports two folder layouts:
+DeepfakeDataset — loads images from the split layout:
 
-  Split layout (preferred for training):
     images/train/real/  images/train/fake/
     images/val/real/    images/val/fake/
     images/test/real/   images/test/fake/
-
-  Flat layout (original inference-only structure):
-    images/real/   images/fake/
-    Used as a single "test" split when no split layout exists.
 
 Label mapping: Real -> 0, Fake -> 1
 """
@@ -23,7 +18,6 @@ from torchvision import transforms
 from config import (
     IMAGE_SIZE, VIT_IMAGE_SIZE,
     IMAGENET_MEAN, IMAGENET_STD,
-    REAL_IMAGES_DIR, FAKE_IMAGES_DIR,
     TRAIN_DIR, VAL_DIR, TEST_DIR,
     BATCH_SIZE_TRAIN,
     MODEL_VIT,
@@ -39,13 +33,20 @@ def _build_transform(split: str, target_size: int) -> transforms.Compose:
         return transforms.Compose([
             transforms.Resize((target_size, target_size)),
             transforms.RandomHorizontalFlip(p=0.5),
-            transforms.ColorJitter(brightness=0.25, contrast=0.25,
-                                   saturation=0.20, hue=0.05),
-            transforms.RandomAffine(degrees=10, translate=(0.05, 0.05)),
-            transforms.RandomGrayscale(p=0.05),
+            # Stronger colour jitter: prevents the model learning source-specific
+            # colour distributions (randomuser.me vs StyleGAN have different stats)
+            transforms.ColorJitter(brightness=0.4, contrast=0.4,
+                                   saturation=0.3, hue=0.08),
+            transforms.RandomAffine(degrees=12, translate=(0.06, 0.06)),
+            transforms.RandomPerspective(distortion_scale=0.15, p=0.2),
+            # Blur: GAN images are unnaturally sharp; blur forces the model to look
+            # at facial structure rather than pixel-level sharpness artefacts
+            transforms.RandomApply(
+                [transforms.GaussianBlur(kernel_size=5, sigma=(0.1, 2.0))], p=0.3),
             transforms.ToTensor(),
             transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-            transforms.RandomErasing(p=0.1, scale=(0.02, 0.08), value=0),
+            # Larger erasing blocks cover meaningful regions instead of noise
+            transforms.RandomErasing(p=0.2, scale=(0.02, 0.15), value=0),
         ])
     else:
         return transforms.Compose([
@@ -66,19 +67,13 @@ class DeepfakeDataset(Dataset):
         target_size = VIT_IMAGE_SIZE if model_name == MODEL_VIT else IMAGE_SIZE
         self.transform = _build_transform(split, target_size)
         self.target_size = target_size
-        self.samples: list[tuple[Path, int]] = []
 
         split_dir = Path(_SPLIT_DIRS.get(split, TEST_DIR))
-
-        if split_dir.exists():
-            real_paths = _scan_dir(split_dir / 'real')
-            fake_paths = _scan_dir(split_dir / 'fake')
-        else:
-            # Fall back to flat structure — treat all images as a single pool
-            real_paths = _scan_dir(Path(REAL_IMAGES_DIR))
-            fake_paths = _scan_dir(Path(FAKE_IMAGES_DIR))
-
-        self.samples = [(p, 0) for p in real_paths] + [(p, 1) for p in fake_paths]
+        real_paths = _scan_dir(split_dir / 'real')
+        fake_paths = _scan_dir(split_dir / 'fake')
+        self.samples: list[tuple[Path, int]] = (
+            [(p, 0) for p in real_paths] + [(p, 1) for p in fake_paths]
+        )
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -103,11 +98,10 @@ def get_dataloader(split: str, model_name: str,
     if batch_size is None:
         batch_size = BATCH_SIZE_TRAIN
     dataset = DeepfakeDataset(split=split, model_name=model_name)
-    shuffle = (split == 'train')
     return DataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=shuffle,
+        shuffle=(split == 'train'),
         num_workers=num_workers,
         pin_memory=False,
     )
