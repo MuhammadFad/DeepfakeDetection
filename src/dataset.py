@@ -32,15 +32,12 @@ def _build_transform(split: str, target_size: int) -> transforms.Compose:
         return transforms.Compose([
             transforms.Resize((target_size, target_size)),
             transforms.RandomHorizontalFlip(p=0.5),
-            transforms.ColorJitter(brightness=0.4, contrast=0.4,
-                                   saturation=0.3, hue=0.08),
-            transforms.RandomAffine(degrees=12, translate=(0.06, 0.06)),
-            transforms.RandomPerspective(distortion_scale=0.15, p=0.2),
-            transforms.RandomApply(
-                [transforms.GaussianBlur(kernel_size=5, sigma=(0.1, 2.0))], p=0.3),
+            transforms.ColorJitter(brightness=0.3, contrast=0.3,
+                                   saturation=0.2, hue=0.05),
+            transforms.RandomRotation(degrees=10),
             transforms.ToTensor(),
             transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-            transforms.RandomErasing(p=0.2, scale=(0.02, 0.15), value=0),
+            transforms.RandomErasing(p=0.2, scale=(0.02, 0.10), value=0),
         ])
     else:
         return transforms.Compose([

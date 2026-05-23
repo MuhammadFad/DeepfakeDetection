@@ -256,9 +256,12 @@ def train_model(model_name: str, warmup_epochs: int, total_epochs: int,
         print(f'  {line}')
         logger.log(line)
 
-    # Phase 2: Full fine-tune
-    print(f'\n  [Phase 2] Fine-tune — full network ({fine_tune_epochs} epochs, patience={EARLY_STOP_PATIENCE})')
-    logger.log(f'[Phase 2] full fine-tune  patience={EARLY_STOP_PATIENCE}')
+    # Phase 2: Full fine-tune — halve batch size; all params have gradients now
+    p2_batch = max(8, batch_size // 2)
+    train_loader = get_dataloader('train', model_name, batch_size=p2_batch, num_workers=num_workers)
+    val_loader   = get_dataloader('val',   model_name, batch_size=p2_batch, num_workers=num_workers)
+    print(f'\n  [Phase 2] Fine-tune — full network ({fine_tune_epochs} epochs, patience={EARLY_STOP_PATIENCE}, batch={p2_batch})')
+    logger.log(f'[Phase 2] full fine-tune  patience={EARLY_STOP_PATIENCE}  batch={p2_batch}')
     no_improve = 0
     unfreeze_all(model)
     backbone_params, head_params = split_params(model)
