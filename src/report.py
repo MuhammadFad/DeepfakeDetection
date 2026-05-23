@@ -89,13 +89,41 @@ _MODEL_SHORT = {
 }
 
 
-def _image_gallery(image_results: list) -> str:
-    if not image_results:
+_GALLERY_LIMIT = 20  # images shown in the gallery
+
+
+def _sample_gallery(image_results: list, n: int) -> list:
+    """Return up to n images, balanced across correct/wrong/mixed buckets."""
+    correct, wrong, mixed = [], [], []
+    for row in image_results:
+        gt    = row['ground_truth']
+        preds = row.get('predictions', {})
+        valid = [mn for mn in MODEL_ORDER if preds.get(mn, {}).get('label') not in ('N/A', None, '')]
+        if not valid:
+            continue
+        hits = sum(1 for mn in valid if preds[mn]['label'] == gt)
+        if hits == len(valid):
+            correct.append(row)
+        elif hits == 0:
+            wrong.append(row)
+        else:
+            mixed.append(row)
+
+    per_bucket = max(1, n // 3)
+    sample = correct[:per_bucket] + wrong[:per_bucket] + mixed[:per_bucket]
+    # Top up from whichever bucket has remaining items
+    remaining = [r for r in image_results if r not in sample]
+    sample += remaining[: max(0, n - len(sample))]
+    return sample[:n]
+
+
+def _image_gallery(image_results: list, gallery_rows: list) -> str:
+    if not gallery_rows:
         return ''
 
     has_heatmaps = any(
         any(v is not None for v in row.get('heatmaps', {}).values())
-        for row in image_results
+        for row in gallery_rows
     )
 
     def _img_tag(b64, alt='', cls='gc-thumb'):
@@ -104,7 +132,7 @@ def _image_gallery(image_results: list) -> str:
         return f'<div class="{cls} gc-no-img">N/A</div>'
 
     cards = ''
-    for row in image_results:
+    for row in gallery_rows:
         gt       = row['ground_truth']
         name     = row['image_name']
         preds    = row.get('predictions', {})
@@ -279,8 +307,14 @@ def generate_html_report(image_results: list, summary_stats: dict) -> str:
       <div class="card-sub">Accuracy</div>
     </div>"""
 
+    sample_rows = _sample_gallery(image_results, _GALLERY_LIMIT)
+    table_subtitle = (f' <span style="font-size:0.78rem;color:#6e7681;font-weight:400;'
+                      f'text-transform:none;letter-spacing:0">'
+                      f'— {len(sample_rows)} of {total_images} images (balanced sample)</span>'
+                      if total_images > len(sample_rows) else '')
+
     rows_html = ''
-    for row in image_results:
+    for row in sample_rows:
         gt       = row['ground_truth']
         gt_badge = f'<span class="badge-real">Real</span>' if gt == 'Real' else f'<span class="badge-fake">Fake</span>'
         cells    = f'<td class="td-name">{row["image_name"]}</td><td>{gt_badge}</td>'
@@ -305,7 +339,7 @@ def generate_html_report(image_results: list, summary_stats: dict) -> str:
             cm_html += _cm_html(cm, st.get('display_name', mn))
 
     interpretation  = _interpretation(summary_stats)
-    gallery_section = _image_gallery(image_results)
+    gallery_section = _image_gallery(image_results, sample_rows)
 
     training_history = _load_training_history()
     if training_history:
@@ -405,7 +439,7 @@ def generate_html_report(image_results: list, summary_stats: dict) -> str:
     <div class="chart-box">{chart_div}</div>
   </section>
   <section class="section">
-    <h2 class="section-title">Per-Image Results</h2>
+    <h2 class="section-title">Per-Image Results{table_subtitle}</h2>
     <div class="legend">
       <span><span class="legend-dot" style="background:#3fb950"></span>Correct prediction</span>
       <span><span class="legend-dot" style="background:#f85149"></span>Wrong prediction</span>
