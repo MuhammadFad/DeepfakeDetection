@@ -93,10 +93,15 @@ Training is done on **Google Colab** using the included notebook — it's faster
 1. Open [colab.research.google.com](https://colab.research.google.com) and upload `train_colab.ipynb`
 2. Set runtime: **Runtime → Change runtime type → T4 GPU**
 3. Run all cells top to bottom — the notebook will:
-   - Clone the repo
-   - Download the [Kaggle 140k dataset](https://www.kaggle.com/datasets/xhlulu/140k-real-and-fake-faces) (you'll need a `kaggle.json` API key)
-   - Train all three models (~30 min total on T4)
+   - Clone the repo (skipped if already present — reconnect-safe)
+   - Download the [Kaggle 140k dataset](https://www.kaggle.com/datasets/xhlulu/140k-real-and-fake-faces) (you'll need a `kaggle.json` API key; skipped if already downloaded)
+   - Populate image folders, skipping files that already exist
+   - Set batch size to 32 for the T4's 16 GB VRAM
+   - Train all three models (~10 min per model, ~30 min total on T4)
    - Prompt you to download the three `.pth` checkpoint files
+
+**Reconnect-safe:** Every setup cell is idempotent — re-running after a disconnect is always safe. Training cells use `--skip-existing` so finished models are never retrained from scratch.
+
 4. Place the downloaded `.pth` files in `checkpoints/` and commit them with Git LFS:
 
 ```bash
