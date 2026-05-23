@@ -262,7 +262,7 @@ def train_model(model_name: str, warmup_epochs: int, total_epochs: int,
         logger.log(line)
 
     # Phase 2: Full fine-tune — halve batch size; all params have gradients now
-    p2_batch = max(8, batch_size // 2)
+    p2_batch = max(8, batch_size - 32)
     if use_cache:
         # Reuse the cached GPU dataset — no second cache fill, no extra VRAM consumed
         from torch.utils.data import DataLoader as _DL
