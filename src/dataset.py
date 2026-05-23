@@ -19,7 +19,6 @@ from .config import (
     IMAGE_SIZE, VIT_IMAGE_SIZE,
     IMAGENET_MEAN, IMAGENET_STD,
     TRAIN_DIR, VAL_DIR, TEST_DIR,
-    BATCH_SIZE_TRAIN,
     MODEL_VIT,
 )
 
@@ -89,15 +88,10 @@ class DeepfakeDataset(Dataset):
 
 
 def get_dataloader(split: str, model_name: str,
-                   batch_size: int = None, num_workers: int = None) -> DataLoader:
-    if batch_size is None:
-        batch_size = BATCH_SIZE_TRAIN
-    # num_workers > 0 crashes on Windows (no fork). Auto-detect unless caller overrides.
-    if num_workers is None:
-        import platform
-        num_workers = 0 if platform.system() == 'Windows' else 4
+                   batch_size: int, num_workers: int) -> DataLoader:
     import torch as _torch
     dataset = DeepfakeDataset(split=split, model_name=model_name)
+    
     return DataLoader(
         dataset,
         batch_size=batch_size,
@@ -105,5 +99,5 @@ def get_dataloader(split: str, model_name: str,
         num_workers=num_workers,
         pin_memory=_torch.cuda.is_available(),
         persistent_workers=(num_workers > 0),
-        prefetch_factor=4 if num_workers > 0 else None,
+        prefetch_factor=2 if num_workers > 0 else None,
     )
