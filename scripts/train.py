@@ -127,8 +127,9 @@ def train_epoch(model, loader, optimizer, criterion, scaler) -> tuple[float, flo
     total_loss = correct = total = 0
     pbar = tqdm(loader, desc='    batch', leave=False, ncols=80)
     for imgs, labels in pbar:
-        imgs, labels = imgs.to(DEVICE), labels.to(DEVICE)
-        optimizer.zero_grad()
+        imgs   = imgs.to(DEVICE, non_blocking=True)
+        labels = labels.to(DEVICE, non_blocking=True)
+        optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast(device_type='cuda', enabled=scaler.is_enabled()):
             logits = model(imgs)
             loss = criterion(logits, labels)
@@ -182,7 +183,8 @@ def _save_checkpoint(state: dict, path: str):
     os.rename(tmp, path)
 
 def train_model(model_name: str, warmup_epochs: int, total_epochs: int,
-                skip_existing: bool, batch_size: int, num_workers: int) -> dict:
+                skip_existing: bool, batch_size: int, num_workers: int,
+                use_cache: bool = False) -> dict:
     display = MODEL_DISPLAY_NAMES[model_name]
     fine_tune_epochs = total_epochs - warmup_epochs
     ckpt_path = os.path.join(CHECKPOINT_DIR, f'{model_name}_best.pth')
@@ -205,7 +207,8 @@ def train_model(model_name: str, warmup_epochs: int, total_epochs: int,
     logger.log(f'--- {display} ---')
     logger.log(f'warmup={warmup_epochs}  total={total_epochs}  patience={EARLY_STOP_PATIENCE}  batch={batch_size}')
 
-    train_loader = get_dataloader('train', model_name, batch_size=batch_size, num_workers=num_workers)
+    eff_workers  = 0 if use_cache else num_workers
+    train_loader = get_dataloader('train', model_name, batch_size=batch_size, num_workers=eff_workers, use_cache=use_cache, device=DEVICE)
     val_loader   = get_dataloader('val',   model_name, batch_size=batch_size, num_workers=num_workers)
     has_val      = len(val_loader.dataset) > 0
 
@@ -221,6 +224,8 @@ def train_model(model_name: str, warmup_epochs: int, total_epochs: int,
 
     model = timm.create_model(model_name, pretrained=True, num_classes=NUM_CLASSES)
     model = model.to(DEVICE)
+    if torch.cuda.is_available() and hasattr(torch, 'compile'):
+        model = torch.compile(model)
     criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
     scaler = torch.amp.GradScaler(device='cuda', enabled=torch.cuda.is_available())
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
@@ -258,7 +263,7 @@ def train_model(model_name: str, warmup_epochs: int, total_epochs: int,
 
     # Phase 2: Full fine-tune — halve batch size; all params have gradients now
     p2_batch = max(8, batch_size // 2)
-    train_loader = get_dataloader('train', model_name, batch_size=p2_batch, num_workers=num_workers)
+    train_loader = get_dataloader('train', model_name, batch_size=p2_batch, num_workers=eff_workers, use_cache=use_cache, device=DEVICE)
     val_loader   = get_dataloader('val',   model_name, batch_size=p2_batch, num_workers=num_workers)
     print(f'\n  [Phase 2] Fine-tune — full network ({fine_tune_epochs} epochs, patience={EARLY_STOP_PATIENCE}, batch={p2_batch})')
     logger.log(f'[Phase 2] full fine-tune  patience={EARLY_STOP_PATIENCE}  batch={p2_batch}')
@@ -322,6 +327,8 @@ def main():
                         help='Retrain even if a valid checkpoint exists')
     parser.add_argument('--auto-scale', action='store_true',
                         help='Automatically maximize batch size and CPU workers for the current hardware')
+    parser.add_argument('--cache', action='store_true',
+                        help='Cache entire training set on GPU VRAM as FP16 (requires CUDA)')
     args = parser.parse_args()
 
     skip = args.skip_existing and not args.force
@@ -346,7 +353,8 @@ def main():
     all_history = {}
     for mn in models_to_train:
         hist = train_model(mn, warmup_epochs=args.warmup, total_epochs=args.epochs,
-                           skip_existing=skip, batch_size=dynamic_batch, num_workers=dynamic_workers)
+                           skip_existing=skip, batch_size=dynamic_batch, num_workers=dynamic_workers,
+                           use_cache=args.cache)
         if hist:
             all_history[mn] = hist
         gc.collect()
