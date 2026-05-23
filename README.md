@@ -44,7 +44,7 @@ git lfs install
 ### 1. Clone
 
 ```bash
-git clone https://github.com/mfahad16405/DeepfakeDetection.git
+git clone https://github.com/MuhammadFad/DeepfakeDetection.git
 cd DeepfakeDetection
 ```
 
