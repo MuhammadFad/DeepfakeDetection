@@ -10,12 +10,12 @@ Label mapping: Real -> 0, Fake -> 1
 
 from pathlib import Path
 
-from PIL import Image
 import torch
+from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 
-from config import (
+from .config import (
     IMAGE_SIZE, VIT_IMAGE_SIZE,
     IMAGENET_MEAN, IMAGENET_STD,
     TRAIN_DIR, VAL_DIR, TEST_DIR,
@@ -33,19 +33,14 @@ def _build_transform(split: str, target_size: int) -> transforms.Compose:
         return transforms.Compose([
             transforms.Resize((target_size, target_size)),
             transforms.RandomHorizontalFlip(p=0.5),
-            # Stronger colour jitter: prevents the model learning source-specific
-            # colour distributions (randomuser.me vs StyleGAN have different stats)
             transforms.ColorJitter(brightness=0.4, contrast=0.4,
                                    saturation=0.3, hue=0.08),
             transforms.RandomAffine(degrees=12, translate=(0.06, 0.06)),
             transforms.RandomPerspective(distortion_scale=0.15, p=0.2),
-            # Blur: GAN images are unnaturally sharp; blur forces the model to look
-            # at facial structure rather than pixel-level sharpness artefacts
             transforms.RandomApply(
                 [transforms.GaussianBlur(kernel_size=5, sigma=(0.1, 2.0))], p=0.3),
             transforms.ToTensor(),
             transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-            # Larger erasing blocks cover meaningful regions instead of noise
             transforms.RandomErasing(p=0.2, scale=(0.02, 0.15), value=0),
         ])
     else:
@@ -94,14 +89,16 @@ class DeepfakeDataset(Dataset):
 
 
 def get_dataloader(split: str, model_name: str,
-                   batch_size: int = None, num_workers: int = 0) -> DataLoader:
+                   batch_size: int = None, num_workers: int = 4) -> DataLoader:
     if batch_size is None:
         batch_size = BATCH_SIZE_TRAIN
+    import torch as _torch
     dataset = DeepfakeDataset(split=split, model_name=model_name)
     return DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=(split == 'train'),
         num_workers=num_workers,
-        pin_memory=False,
+        pin_memory=_torch.cuda.is_available(),
+        persistent_workers=(num_workers > 0),
     )

@@ -21,7 +21,7 @@ try:
 except ImportError:
     _AVAILABLE = False
 
-from config import IMAGE_SIZE, VIT_IMAGE_SIZE
+from .config import IMAGE_SIZE, VIT_IMAGE_SIZE
 
 
 def available() -> bool:

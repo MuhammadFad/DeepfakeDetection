@@ -1,7 +1,7 @@
 import numpy as np
 from sklearn.metrics import confusion_matrix
 
-from config import MODEL_DISPLAY_NAMES
+from .config import MODEL_DISPLAY_NAMES
 
 
 def calculate_accuracy(predictions: list, ground_truths: list) -> float:
@@ -37,10 +37,6 @@ def calculate_per_class_accuracy(predictions: list, ground_truths: list) -> dict
 
 
 def generate_summary_stats(all_model_results: dict) -> dict:
-    """
-    all_model_results: {model_name: [{'prediction': str|None, 'ground_truth': str}, ...]}
-    Returns per-model stats dict.
-    """
     summary = {}
     for model_name, results in all_model_results.items():
         valid = [(r['prediction'], r['ground_truth'])

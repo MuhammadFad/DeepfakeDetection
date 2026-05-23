@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from torchvision import transforms
 
-from config import IMAGE_SIZE, IMAGENET_MEAN, IMAGENET_STD
+from .config import IMAGE_SIZE, IMAGENET_MEAN, IMAGENET_STD
 
 logger = logging.getLogger(__name__)
 

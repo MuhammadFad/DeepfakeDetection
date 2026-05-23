@@ -5,7 +5,7 @@ import logging
 import torch
 import timm
 
-from config import (
+from .config import (
     DEVICE, NUM_CLASSES,
     MODEL_XCEPTION, MODEL_VIT, MODEL_EFFICIENTNET,
     MODEL_DISPLAY_NAMES, CHECKPOINT_DIR,
@@ -15,11 +15,6 @@ logger = logging.getLogger(__name__)
 
 
 def load_model(model_name: str):
-    """
-    Load a timm model with ImageNet-pretrained backbone and a randomly-
-    initialised 2-class head for binary Real/Fake classification.
-    Returns the model in eval mode, or None on failure.
-    """
     try:
         model = timm.create_model(model_name, pretrained=True, num_classes=NUM_CLASSES)
         model = model.to(DEVICE)
@@ -33,11 +28,6 @@ def load_model(model_name: str):
 
 
 def load_checkpoint(model_name: str):
-    """
-    Load a fine-tuned checkpoint if one exists; otherwise fall back to
-    a fresh ImageNet-pretrained model with a random 2-class head.
-    Always returns the model in eval mode.
-    """
     ckpt_path = os.path.join(CHECKPOINT_DIR, f'{model_name}_best.pth')
     model = timm.create_model(model_name, pretrained=True, num_classes=NUM_CLASSES)
     model = model.to(DEVICE)
@@ -60,11 +50,6 @@ def load_checkpoint(model_name: str):
 
 
 def load_all_models(use_checkpoints: bool = True) -> dict:
-    """
-    Load all three models.
-    If use_checkpoints=True (default), loads fine-tuned weights when available,
-    falling back to ImageNet weights when no checkpoint exists.
-    """
     models = {}
     for name in [MODEL_XCEPTION, MODEL_VIT, MODEL_EFFICIENTNET]:
         display = MODEL_DISPLAY_NAMES.get(name, name)
@@ -82,11 +67,6 @@ def load_all_models(use_checkpoints: bool = True) -> dict:
 
 
 def run_inference(model, tensor: torch.Tensor) -> tuple[str | None, float | None]:
-    """
-    Run a single forward pass.
-    Returns (predicted_label, confidence_pct) or (None, None) on failure.
-    Index 0 = Real, index 1 = Fake.
-    """
     try:
         tensor = tensor.to(DEVICE)
         with torch.no_grad():

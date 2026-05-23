@@ -1,22 +1,24 @@
 """
-Split a custom flat dataset into train / val / test for use with train.py.
+Split a custom flat dataset into train / val / test for use with scripts/train.py.
 
 Provide the paths to your own real and fake image directories.
 Files are copied by default; pass --move to relocate them instead.
 
-Usage:
-    python prepare_data.py --real path/to/real --fake path/to/fake
-    python prepare_data.py --real path/to/real --fake path/to/fake --move
-    python prepare_data.py --real path/to/real --fake path/to/fake --seed 99
+Usage (run from project root):
+    python scripts/prepare_data.py --real path/to/real --fake path/to/fake
+    python scripts/prepare_data.py --real path/to/real --fake path/to/fake --move
 """
+
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import argparse
 import math
 import random
 import shutil
-from pathlib import Path
 
-from config import TRAIN_DIR, VAL_DIR, TEST_DIR, TRAIN_RATIO, VAL_RATIO
+from src.config import TRAIN_DIR, VAL_DIR, TEST_DIR, TRAIN_RATIO, VAL_RATIO
 
 IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.bmp'}
 
@@ -57,13 +59,13 @@ def prepare_class(src_dir: Path, label: str,
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Split a flat dataset into train/val/test for train.py')
+        description='Split a flat dataset into train/val/test for scripts/train.py')
     parser.add_argument('--real', required=True,
                         help='Path to directory containing real face images')
     parser.add_argument('--fake', required=True,
                         help='Path to directory containing fake/deepfake images')
     parser.add_argument('--move', action='store_true',
-                        help='Move files instead of copying (frees source folders)')
+                        help='Move files instead of copying')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducible shuffle (default: 42)')
     args = parser.parse_args()
@@ -76,8 +78,7 @@ def main():
             print(f'Error: {name} path does not exist: {p}')
             return
 
-    print(f'Splitting images  (seed={args.seed}, '
-          f'{"move" if args.move else "copy"} mode) ...')
+    print(f'Splitting images  (seed={args.seed}, {"move" if args.move else "copy"} mode) ...')
     prepare_class(real_src, 'real', TRAIN_RATIO, VAL_RATIO, args.seed, args.move)
     prepare_class(fake_src, 'fake', TRAIN_RATIO, VAL_RATIO, args.seed, args.move)
 
@@ -87,7 +88,7 @@ def main():
         f = len(list((Path(split_dir) / 'fake').glob('*'))) if (Path(split_dir) / 'fake').exists() else 0
         print(f'  {split_name:5s}: {r} real + {f} fake = {r+f} total')
 
-    print('\nDone. Run  python train.py  to start fine-tuning.')
+    print('\nDone. Run  python scripts/train.py  to start fine-tuning.')
 
 
 if __name__ == '__main__':

@@ -4,23 +4,23 @@ Fine-tuning pipeline — two-phase training for all three deepfake detection mod
 Phase 1 (warmup): Freeze backbone, train only the classification head.
 Phase 2 (fine-tune): Unfreeze everything, use differential learning rates.
 
-Checkpoints are written atomically (temp file + rename) so a crash mid-save
-never corrupts the previous best checkpoint.
-
-Usage:
-    python train.py                         # train all three models
-    python train.py --model xception        # train one model
-    python train.py --model vit_small_patch16_224
-    python train.py --model efficientnet_b4
-    python train.py --skip-existing         # skip models with a valid checkpoint
-    python train.py --epochs 15             # override epoch count
+Recommended: run via train_colab.ipynb on a Colab T4 GPU.
+For local runs with a GPU, call from the project root:
+    python scripts/train.py --model xception
+    python scripts/train.py --model vit_small_patch16_224
+    python scripts/train.py --model efficientnet_b4
+    python scripts/train.py --skip-existing
+    python scripts/train.py --epochs 15
 """
+
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import argparse
 import gc
 import json
 import os
-import sys
 
 import timm
 import torch
@@ -28,16 +28,19 @@ import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
 
-import logger
-from config import (
-    DEVICE, NUM_CLASSES,
+import src.logger as logger
+from src.config import (
+    DEVICE, NUM_CLASSES, CPU_THREADS,
     MODEL_XCEPTION, MODEL_VIT, MODEL_EFFICIENTNET, MODEL_DISPLAY_NAMES,
     CHECKPOINT_DIR, OUTPUT_DIR, TRAINING_HISTORY_PATH,
     BATCH_SIZE_TRAIN, WARMUP_EPOCHS, TOTAL_EPOCHS, EARLY_STOP_PATIENCE,
     LR_HEAD, LR_BACKBONE, LR_HEAD_FT, WEIGHT_DECAY, LABEL_SMOOTHING,
 )
-from dataset import get_dataloader, DeepfakeDataset
-from pathlib import Path
+
+if CPU_THREADS > 0:
+    torch.set_num_threads(CPU_THREADS)
+
+from src.dataset import get_dataloader
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +77,6 @@ def unfreeze_all(model):
 def train_epoch(model, loader, optimizer, criterion) -> tuple[float, float]:
     model.train()
     total_loss = correct = total = 0
-
     pbar = tqdm(loader, desc='    batch', leave=False, ncols=80)
     for imgs, labels in pbar:
         imgs, labels = imgs.to(DEVICE), labels.to(DEVICE)
@@ -84,13 +86,11 @@ def train_epoch(model, loader, optimizer, criterion) -> tuple[float, float]:
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
-
         bs = imgs.size(0)
         total_loss += loss.item() * bs
         correct += (logits.detach().argmax(1) == labels).sum().item()
         total += bs
         pbar.set_postfix(loss=f'{loss.item():.3f}', acc=f'{100.*correct/total:.1f}%')
-
     return total_loss / total, 100. * correct / total
 
 
@@ -114,7 +114,6 @@ def eval_epoch(model, loader, criterion) -> tuple[float, float]:
 # ---------------------------------------------------------------------------
 
 def _is_valid_checkpoint(path: str) -> bool:
-    """Return True if path exists and can be loaded by torch."""
     if not os.path.exists(path):
         return False
     try:
@@ -141,7 +140,6 @@ def train_model(model_name: str, warmup_epochs: int, total_epochs: int,
     fine_tune_epochs = total_epochs - warmup_epochs
     ckpt_path = os.path.join(CHECKPOINT_DIR, f'{model_name}_best.pth')
 
-    # Clean up any stale .tmp file left by a previous crashed run
     tmp_path = ckpt_path + '.tmp'
     if os.path.exists(tmp_path):
         os.remove(tmp_path)
@@ -161,7 +159,6 @@ def train_model(model_name: str, warmup_epochs: int, total_epochs: int,
     logger.log(f'--- {display} ---')
     logger.log(f'warmup={warmup_epochs}  total={total_epochs}  patience={EARLY_STOP_PATIENCE}  batch={BATCH_SIZE_TRAIN}')
 
-    # ── Data ────────────────────────────────────────────────────────────────
     train_loader = get_dataloader('train', model_name, batch_size=BATCH_SIZE_TRAIN)
     val_loader   = get_dataloader('val',   model_name, batch_size=BATCH_SIZE_TRAIN)
     has_val      = len(val_loader.dataset) > 0
@@ -172,11 +169,10 @@ def train_model(model_name: str, warmup_epochs: int, total_epochs: int,
     logger.log(f'data  train={n_train}  val={n_val}')
 
     if n_train == 0:
-        print('  No training data found. Run:  python download_data.py --count 50')
+        print('  No training data found — populate images/train/ first.')
         logger.log('ABORT: no training data found')
         return {}
 
-    # ── Model ────────────────────────────────────────────────────────────────
     model = timm.create_model(model_name, pretrained=True, num_classes=NUM_CLASSES)
     model = model.to(DEVICE)
     criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
@@ -192,7 +188,7 @@ def train_model(model_name: str, warmup_epochs: int, total_epochs: int,
         history['val_loss'].append(round(vl_loss, 4))
         history['val_acc'].append(round(vl_acc, 2))
 
-    # ── Phase 1: Warmup (head only) ──────────────────────────────────────────
+    # Phase 1: Warmup (head only)
     print(f'\n  [Phase 1] Warmup — head only ({warmup_epochs} epochs)')
     logger.log(f'[Phase 1] warmup — head only')
     freeze_backbone(model)
@@ -217,7 +213,7 @@ def train_model(model_name: str, warmup_epochs: int, total_epochs: int,
         print(f'  {line}')
         logger.log(line)
 
-    # ── Phase 2: Full fine-tune ───────────────────────────────────────────────
+    # Phase 2: Full fine-tune
     print(f'\n  [Phase 2] Fine-tune — full network ({fine_tune_epochs} epochs, '
           f'early-stop patience={EARLY_STOP_PATIENCE})')
     logger.log(f'[Phase 2] full fine-tune  patience={EARLY_STOP_PATIENCE}')
@@ -227,8 +223,7 @@ def train_model(model_name: str, warmup_epochs: int, total_epochs: int,
     param_groups = [{'params': backbone_params, 'lr': LR_BACKBONE},
                     {'params': head_params,     'lr': LR_HEAD_FT}]
     optimizer = optim.AdamW(param_groups, weight_decay=WEIGHT_DECAY)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=fine_tune_epochs, eta_min=1e-7)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=fine_tune_epochs, eta_min=1e-7)
 
     for ep in range(fine_tune_epochs):
         global_ep = warmup_epochs + ep + 1
@@ -285,11 +280,10 @@ def main():
     parser.add_argument('--skip-existing', action='store_true',
                         help='Skip models that already have a valid checkpoint')
     parser.add_argument('--force', action='store_true',
-                        help='Retrain even if a valid checkpoint exists (overrides --skip-existing)')
+                        help='Retrain even if a valid checkpoint exists')
     args = parser.parse_args()
 
     skip = args.skip_existing and not args.force
-
     models_to_train = ([args.model] if args.model
                        else [MODEL_XCEPTION, MODEL_VIT, MODEL_EFFICIENTNET])
 
@@ -310,10 +304,8 @@ def main():
         gc.collect()
         torch.cuda.empty_cache()
 
-    # Save combined history for report.py
     if all_history:
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-        # Merge with any existing history so partial runs accumulate
         existing = {}
         if os.path.exists(TRAINING_HISTORY_PATH):
             try:
