@@ -35,7 +35,11 @@ def load_checkpoint(model_name: str):
     if os.path.exists(ckpt_path):
         try:
             state = torch.load(ckpt_path, map_location=DEVICE)
-            model.load_state_dict(state['model_state_dict'])
+            sd = state['model_state_dict']
+            # torch.compile() wraps keys with '_orig_mod.' — strip it for plain model loading
+            if any(k.startswith('_orig_mod.') for k in sd):
+                sd = {k.removeprefix('_orig_mod.'): v for k, v in sd.items()}
+            model.load_state_dict(sd)
             val_acc = state.get('val_acc', '?')
             epoch   = state.get('epoch', '?')
             print(f'checkpoint (ep={epoch}, val={val_acc:.1f}%)', end=' ')

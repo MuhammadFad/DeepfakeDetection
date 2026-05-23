@@ -65,8 +65,10 @@ def _is_valid_checkpoint(path: str) -> bool:
 def load_and_prepare_model(model_name: str) -> nn.Module:
     model = timm.create_model(model_name, pretrained=True, num_classes=NUM_CLASSES)
     model = model.to(DEVICE)
-    if hasattr(model, 'set_grad_checkpointing'):
+    try:
         model.set_grad_checkpointing(enable=True)
+    except (AssertionError, NotImplementedError):
+        pass
     model = torch.compile(model, mode='reduce-overhead')
     return model
 

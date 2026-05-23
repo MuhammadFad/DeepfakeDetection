@@ -7,11 +7,14 @@ For ViT: hooks into the last transformer block's norm with patch reshaping.
 
 import base64
 import io
+import logging
 
 import cv2
 import numpy as np
 import torch
 from PIL import Image
+
+logger = logging.getLogger(__name__)
 
 try:
     from pytorch_grad_cam import GradCAM
@@ -71,7 +74,12 @@ def generate_heatmap(model, model_name: str, tensor: torch.Tensor, img_path) -> 
     try:
         layer = _target_layer(model, model_name)
         if layer is None:
+            logger.warning("GradCAM: no target layer found for %s", model_name)
             return None
+
+        # Ensure tensor is on the same device as the model
+        device = next(model.parameters()).device
+        tensor = tensor.to(device)
 
         reshape = _vit_reshape if 'vit' in model_name else None
 
@@ -96,5 +104,6 @@ def generate_heatmap(model, model_name: str, tensor: torch.Tensor, img_path) -> 
         buf = io.BytesIO()
         Image.fromarray(vis).save(buf, format='JPEG', quality=85)
         return base64.b64encode(buf.getvalue()).decode('utf-8')
-    except Exception:
+    except Exception as exc:
+        logger.warning("GradCAM failed for %s: %s", model_name, exc)
         return None
