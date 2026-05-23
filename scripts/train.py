@@ -78,9 +78,9 @@ def get_dynamic_resources(auto_scale=False, default_batch=16, default_workers=0)
         mb_per_image = 75 
         raw_batch_size = int(target_vram_mb // mb_per_image)
 
-        safe_powers = [256, 128, 64, 32, 16, 8]
+        safe_multiples = [128, 96, 64, 32, 16, 8]
         opt_batch = 16
-        for p in safe_powers:
+        for p in safe_multiples:
             if raw_batch_size >= p:
                 opt_batch = p
                 break
