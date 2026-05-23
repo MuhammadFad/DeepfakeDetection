@@ -96,7 +96,7 @@ Training is done on **Google Colab** using the included notebook — it's faster
    - Clone the repo (skipped if already present — reconnect-safe)
    - Download the [Kaggle 140k dataset](https://www.kaggle.com/datasets/xhlulu/140k-real-and-fake-faces) (you'll need a `kaggle.json` API key; skipped if already downloaded)
    - Populate image folders, skipping files that already exist
-   - Set batch size to 32 for the T4's 16 GB VRAM
+   - Auto-scale batch size to the T4's available VRAM (typically 96–128)
    - Train all three models (~10 min per model, ~30 min total on T4)
    - Prompt you to download the three `.pth` checkpoint files
 
@@ -120,21 +120,52 @@ git push
 
 Phase 1 protects the pretrained backbone from the randomly-initialised head. Phase 2 uses CosineAnnealingLR, gradient clipping (max norm 1.0), and early stopping (patience 5 on val loss). Checkpoints are saved atomically (temp file → rename) so a crash never corrupts a previous best.
 
+**Additional training features:**
+- **Automatic Mixed Precision (AMP)** — `torch.amp.autocast` + `GradScaler` for faster GPU training and lower VRAM usage
+- **`torch.compile()`** — JIT-compiles the model graph on CUDA for extra throughput (PyTorch 2.0+)
+- **Data augmentation** — random horizontal flip, colour jitter (brightness ±0.3, contrast ±0.3, saturation ±0.2), ±10° rotation, and random erasing (p=0.2) applied per-batch
+- **Label smoothing** (ε=0.1) — regularises the cross-entropy loss to reduce overconfidence
+
 ### Local training (advanced)
 
 If you have a local NVIDIA GPU, you can also train locally from the project root:
 
 ```bash
-python scripts/train.py --model xception
-python scripts/train.py --model vit_small_patch16_224
-python scripts/train.py --model efficientnet_b4
+# Train a single model (hardware auto-scales batch size and workers)
+python scripts/train.py --model xception --auto-scale
+python scripts/train.py --model vit_small_patch16_224 --auto-scale
+python scripts/train.py --model efficientnet_b4 --auto-scale
+
+# Train all three models at once
+python scripts/train.py --auto-scale
 
 # Resume after a crash — skips models with a valid checkpoint
-python scripts/train.py --skip-existing
+python scripts/train.py --skip-existing --auto-scale
 
-# Force retrain
+# Force retrain a specific model
 python scripts/train.py --model xception --force
+
+# Override epoch count
+python scripts/train.py --epochs 15
 ```
+
+#### `--auto-scale` (recommended on GPU)
+
+Probes your hardware at startup and maximises throughput:
+- Detects available GPU VRAM and snaps batch size to the largest power-of-2 multiple that fits in ~90% of it (128 → 96 → 64 → 32 → 16 → 8)
+- Sets CPU workers to `cpu_count − 1` on Linux/macOS, forces 0 on Windows (avoids multiprocessing crashes)
+
+Without `--auto-scale` the training script uses conservative defaults (batch 16, 0 workers).
+
+#### `--cache` (high-VRAM GPUs only)
+
+```bash
+python scripts/train.py --model xception --auto-scale --cache
+```
+
+Preloads the **entire training split onto GPU VRAM** as FP16 tensors before training starts. GPU-native augmentation (flip, colour jitter, rotation, random erasing) is then applied each epoch entirely on the GPU — eliminating CPU data-loading overhead almost completely.
+
+Only use this if you have enough VRAM to hold the dataset (~12 GB for the full 140k split). The script raises a clear `RuntimeError` if it runs out of memory.
 
 A live log of every epoch is written to `output/training_log.txt`.
 
@@ -175,7 +206,7 @@ DeepfakeDetection/
 ├── src/                    ← core library modules
 │   ├── config.py           ← all constants, paths, hyperparameters
 │   ├── models.py           ← model loading and inference
-│   ├── dataset.py          ← PyTorch Dataset with augmentation
+│   ├── dataset.py          ← PyTorch Dataset + GPU-cached variant with augmentation
 │   ├── preprocessing.py    ← image loading and normalisation
 │   ├── evaluation.py       ← accuracy, confusion matrix, metrics
 │   ├── explainability.py   ← Grad-CAM heatmap generation
@@ -183,7 +214,7 @@ DeepfakeDetection/
 │   └── logger.py           ← append-only training log
 │
 ├── scripts/                ← training utilities
-│   ├── train.py            ← local fine-tuning pipeline
+│   ├── train.py            ← local fine-tuning pipeline (AMP, auto-scale, GPU cache)
 │   └── prepare_data.py     ← split a custom dataset into train/val/test
 │
 ├── checkpoints/            ← model weights (Git LFS)
