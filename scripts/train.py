@@ -40,6 +40,8 @@ from src.config import (
 if CPU_THREADS > 0:
     torch.set_num_threads(CPU_THREADS)
 
+torch.backends.cudnn.benchmark = True
+
 from src.dataset import get_dataloader
 
 
@@ -74,18 +76,21 @@ def unfreeze_all(model):
 # Training / evaluation loops
 # ---------------------------------------------------------------------------
 
-def train_epoch(model, loader, optimizer, criterion) -> tuple[float, float]:
+def train_epoch(model, loader, optimizer, criterion, scaler) -> tuple[float, float]:
     model.train()
     total_loss = correct = total = 0
     pbar = tqdm(loader, desc='    batch', leave=False, ncols=80)
     for imgs, labels in pbar:
         imgs, labels = imgs.to(DEVICE), labels.to(DEVICE)
         optimizer.zero_grad()
-        logits = model(imgs)
-        loss = criterion(logits, labels)
-        loss.backward()
+        with torch.amp.autocast(device_type='cuda', enabled=scaler.is_enabled()):
+            logits = model(imgs)
+            loss = criterion(logits, labels)
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
         nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
         bs = imgs.size(0)
         total_loss += loss.item() * bs
         correct += (logits.detach().argmax(1) == labels).sum().item()
@@ -176,6 +181,7 @@ def train_model(model_name: str, warmup_epochs: int, total_epochs: int,
     model = timm.create_model(model_name, pretrained=True, num_classes=NUM_CLASSES)
     model = model.to(DEVICE)
     criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
+    scaler = torch.amp.GradScaler(device='cuda', enabled=torch.cuda.is_available())
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
     history   = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
@@ -198,7 +204,7 @@ def train_model(model_name: str, warmup_epochs: int, total_epochs: int,
 
     for ep in range(warmup_epochs):
         logger.log(f'ep {ep+1}/{total_epochs} starting...')
-        tr_loss, tr_acc = train_epoch(model, train_loader, optimizer, criterion)
+        tr_loss, tr_acc = train_epoch(model, train_loader, optimizer, criterion, scaler)
         vl_loss, vl_acc = eval_epoch(model, val_loader, criterion) if has_val else (0., tr_acc)
         _record(tr_loss, tr_acc, vl_loss, vl_acc)
         tag = ''
@@ -228,7 +234,7 @@ def train_model(model_name: str, warmup_epochs: int, total_epochs: int,
     for ep in range(fine_tune_epochs):
         global_ep = warmup_epochs + ep + 1
         logger.log(f'ep {global_ep}/{total_epochs} starting...')
-        tr_loss, tr_acc = train_epoch(model, train_loader, optimizer, criterion)
+        tr_loss, tr_acc = train_epoch(model, train_loader, optimizer, criterion, scaler)
         vl_loss, vl_acc = eval_epoch(model, val_loader, criterion) if has_val else (0., tr_acc)
         _record(tr_loss, tr_acc, vl_loss, vl_acc)
         scheduler.step()
