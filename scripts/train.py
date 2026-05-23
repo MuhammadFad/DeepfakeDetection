@@ -263,8 +263,15 @@ def train_model(model_name: str, warmup_epochs: int, total_epochs: int,
 
     # Phase 2: Full fine-tune — halve batch size; all params have gradients now
     p2_batch = max(8, batch_size // 2)
-    train_loader = get_dataloader('train', model_name, batch_size=p2_batch, num_workers=eff_workers, use_cache=use_cache, device=DEVICE)
-    val_loader   = get_dataloader('val',   model_name, batch_size=p2_batch, num_workers=num_workers)
+    if use_cache:
+        # Reuse the cached GPU dataset — no second cache fill, no extra VRAM consumed
+        from torch.utils.data import DataLoader as _DL
+        train_loader = _DL(train_loader.dataset, batch_size=p2_batch, shuffle=True,
+                           num_workers=0, pin_memory=False, persistent_workers=False)
+    else:
+        train_loader = get_dataloader('train', model_name, batch_size=p2_batch,
+                                      num_workers=eff_workers)
+    val_loader = get_dataloader('val', model_name, batch_size=p2_batch, num_workers=num_workers)
     print(f'\n  [Phase 2] Fine-tune — full network ({fine_tune_epochs} epochs, patience={EARLY_STOP_PATIENCE}, batch={p2_batch})')
     logger.log(f'[Phase 2] full fine-tune  patience={EARLY_STOP_PATIENCE}  batch={p2_batch}')
     no_improve = 0
