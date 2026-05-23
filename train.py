@@ -4,10 +4,16 @@ Fine-tuning pipeline — two-phase training for all three deepfake detection mod
 Phase 1 (warmup): Freeze backbone, train only the classification head.
 Phase 2 (fine-tune): Unfreeze everything, use differential learning rates.
 
+Checkpoints are written atomically (temp file + rename) so a crash mid-save
+never corrupts the previous best checkpoint.
+
 Usage:
-    python train.py                    # train all three models
-    python train.py --model xception   # train one model
-    python train.py --epochs 15        # override epoch count
+    python train.py                         # train all three models
+    python train.py --model xception        # train one model
+    python train.py --model vit_small_patch16_224
+    python train.py --model efficientnet_b4
+    python train.py --skip-existing         # skip models with a valid checkpoint
+    python train.py --epochs 15             # override epoch count
 """
 
 import argparse
@@ -22,6 +28,7 @@ import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
 
+import logger
 from config import (
     DEVICE, NUM_CLASSES,
     MODEL_XCEPTION, MODEL_VIT, MODEL_EFFICIENTNET, MODEL_DISPLAY_NAMES,
@@ -106,24 +113,67 @@ def eval_epoch(model, loader, criterion) -> tuple[float, float]:
 # Per-model training
 # ---------------------------------------------------------------------------
 
-def train_model(model_name: str, warmup_epochs: int, total_epochs: int) -> dict:
+def _is_valid_checkpoint(path: str) -> bool:
+    """Return True if path exists and can be loaded by torch."""
+    if not os.path.exists(path):
+        return False
+    try:
+        torch.load(path, map_location='cpu', weights_only=False)
+        return True
+    except Exception:
+        return False
+
+
+def _save_checkpoint(state: dict, path: str):
+    """Write to a temp file then rename — crash-safe, OneDrive-safe."""
+    import stat
+    tmp = path + '.tmp'
+    torch.save(state, tmp)
+    if os.path.exists(path):
+        os.chmod(path, stat.S_IWRITE)
+        os.remove(path)
+    os.rename(tmp, path)
+
+
+def train_model(model_name: str, warmup_epochs: int, total_epochs: int,
+                skip_existing: bool = False) -> dict:
     display = MODEL_DISPLAY_NAMES[model_name]
     fine_tune_epochs = total_epochs - warmup_epochs
+    ckpt_path = os.path.join(CHECKPOINT_DIR, f'{model_name}_best.pth')
+
+    # Clean up any stale .tmp file left by a previous crashed run
+    tmp_path = ckpt_path + '.tmp'
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
+        print(f'  Removed stale temp file: {tmp_path}')
 
     print(f'\n{"=" * 56}')
     print(f'  Training: {display}')
     print(f'{"=" * 56}')
+
+    if skip_existing and _is_valid_checkpoint(ckpt_path):
+        msg = f'{display}: valid checkpoint exists — skipping'
+        print(f'  Valid checkpoint already exists — skipping.')
+        print(f'  (Use --force to retrain anyway)')
+        logger.log(msg)
+        return {}
+
+    logger.log(f'--- {display} ---')
+    logger.log(f'warmup={warmup_epochs}  total={total_epochs}  patience={EARLY_STOP_PATIENCE}  batch={BATCH_SIZE_TRAIN}')
 
     # ── Data ────────────────────────────────────────────────────────────────
     train_loader = get_dataloader('train', model_name, batch_size=BATCH_SIZE_TRAIN)
     val_loader   = get_dataloader('val',   model_name, batch_size=BATCH_SIZE_TRAIN)
     has_val      = len(val_loader.dataset) > 0
 
-    print(f'  Train: {len(train_loader.dataset)} images  |  '
-          f'Val: {len(val_loader.dataset) if has_val else 0} images')
+    n_train = len(train_loader.dataset)
+    n_val   = len(val_loader.dataset) if has_val else 0
+    print(f'  Train: {n_train} images  |  Val: {n_val} images')
+    logger.log(f'data  train={n_train}  val={n_val}')
 
-    if len(train_loader.dataset) == 0:
-        print('  No training data found. Run:  python download_data.py --count 50 --split')
+    if n_train == 0:
+        print('  No training data found. Run:  python download_data.py --count 50')
+        logger.log('ABORT: no training data found')
         return {}
 
     # ── Model ────────────────────────────────────────────────────────────────
@@ -135,7 +185,6 @@ def train_model(model_name: str, warmup_epochs: int, total_epochs: int) -> dict:
     history   = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
     best_val_loss = float('inf')
     no_improve    = 0
-    ckpt_path     = os.path.join(CHECKPOINT_DIR, f'{model_name}_best.pth')
 
     def _record(tr_loss, tr_acc, vl_loss, vl_acc):
         history['train_loss'].append(round(tr_loss, 4))
@@ -145,28 +194,33 @@ def train_model(model_name: str, warmup_epochs: int, total_epochs: int) -> dict:
 
     # ── Phase 1: Warmup (head only) ──────────────────────────────────────────
     print(f'\n  [Phase 1] Warmup — head only ({warmup_epochs} epochs)')
+    logger.log(f'[Phase 1] warmup — head only')
     freeze_backbone(model)
     _, head_params = split_params(model)
     trainable = head_params if head_params else list(model.parameters())
     optimizer = optim.AdamW(trainable, lr=LR_HEAD)
 
     for ep in range(warmup_epochs):
+        logger.log(f'ep {ep+1}/{total_epochs} starting...')
         tr_loss, tr_acc = train_epoch(model, train_loader, optimizer, criterion)
         vl_loss, vl_acc = eval_epoch(model, val_loader, criterion) if has_val else (0., tr_acc)
         _record(tr_loss, tr_acc, vl_loss, vl_acc)
         tag = ''
         if has_val and vl_loss < best_val_loss:
             best_val_loss = vl_loss
-            torch.save({'model_state_dict': model.state_dict(),
-                        'val_loss': vl_loss, 'val_acc': vl_acc, 'epoch': ep + 1}, ckpt_path)
+            _save_checkpoint({'model_state_dict': model.state_dict(),
+                               'val_loss': vl_loss, 'val_acc': vl_acc, 'epoch': ep + 1}, ckpt_path)
             tag = '  [saved]'
-        print(f'  Ep {ep+1:2d}/{total_epochs} | '
-              f'train {tr_loss:.4f}/{tr_acc:5.1f}% | '
-              f'val {vl_acc:5.1f}% (loss {vl_loss:.4f}){tag}')
+        line = (f'Ep {ep+1:2d}/{total_epochs} | '
+                f'train {tr_loss:.4f}/{tr_acc:5.1f}% | '
+                f'val {vl_acc:5.1f}% (loss {vl_loss:.4f}){tag}')
+        print(f'  {line}')
+        logger.log(line)
 
     # ── Phase 2: Full fine-tune ───────────────────────────────────────────────
     print(f'\n  [Phase 2] Fine-tune — full network ({fine_tune_epochs} epochs, '
           f'early-stop patience={EARLY_STOP_PATIENCE})')
+    logger.log(f'[Phase 2] full fine-tune  patience={EARLY_STOP_PATIENCE}')
     no_improve = 0
     unfreeze_all(model)
     backbone_params, head_params = split_params(model)
@@ -178,6 +232,7 @@ def train_model(model_name: str, warmup_epochs: int, total_epochs: int) -> dict:
 
     for ep in range(fine_tune_epochs):
         global_ep = warmup_epochs + ep + 1
+        logger.log(f'ep {global_ep}/{total_epochs} starting...')
         tr_loss, tr_acc = train_epoch(model, train_loader, optimizer, criterion)
         vl_loss, vl_acc = eval_epoch(model, val_loader, criterion) if has_val else (0., tr_acc)
         _record(tr_loss, tr_acc, vl_loss, vl_acc)
@@ -187,23 +242,29 @@ def train_model(model_name: str, warmup_epochs: int, total_epochs: int) -> dict:
         if has_val and vl_loss < best_val_loss:
             best_val_loss = vl_loss
             no_improve = 0
-            torch.save({'model_state_dict': model.state_dict(),
-                        'val_loss': vl_loss, 'val_acc': vl_acc, 'epoch': global_ep}, ckpt_path)
+            _save_checkpoint({'model_state_dict': model.state_dict(),
+                               'val_loss': vl_loss, 'val_acc': vl_acc, 'epoch': global_ep}, ckpt_path)
             tag = '  [saved]'
         elif has_val:
             no_improve += 1
             if no_improve >= EARLY_STOP_PATIENCE:
-                print(f'  Ep {global_ep:2d}/{total_epochs} | '
-                      f'train {tr_loss:.4f}/{tr_acc:5.1f}% | '
-                      f'val {vl_acc:5.1f}% (loss {vl_loss:.4f})  [early stop]')
+                line = (f'Ep {global_ep:2d}/{total_epochs} | '
+                        f'train {tr_loss:.4f}/{tr_acc:5.1f}% | '
+                        f'val {vl_acc:5.1f}% (loss {vl_loss:.4f})  [early stop]')
+                print(f'  {line}')
+                logger.log(line)
+                logger.log(f'early stop triggered (no improvement for {EARLY_STOP_PATIENCE} epochs)')
                 break
 
-        print(f'  Ep {global_ep:2d}/{total_epochs} | '
-              f'train {tr_loss:.4f}/{tr_acc:5.1f}% | '
-              f'val {vl_acc:5.1f}% (loss {vl_loss:.4f}){tag}')
+        line = (f'Ep {global_ep:2d}/{total_epochs} | '
+                f'train {tr_loss:.4f}/{tr_acc:5.1f}% | '
+                f'val {vl_acc:5.1f}% (loss {vl_loss:.4f}){tag}')
+        print(f'  {line}')
+        logger.log(line)
 
     best_acc = max(history['val_acc']) if history['val_acc'] else 0.0
     print(f'\n  Best val accuracy: {best_acc:.1f}%  ->  {ckpt_path}')
+    logger.log(f'best val acc: {best_acc:.1f}%  ->  {ckpt_path}')
     del model, optimizer
     gc.collect()
     return history
@@ -221,17 +282,29 @@ def main():
                         help=f'Total epochs (default: {TOTAL_EPOCHS})')
     parser.add_argument('--warmup', type=int, default=WARMUP_EPOCHS,
                         help=f'Warmup epochs (default: {WARMUP_EPOCHS})')
+    parser.add_argument('--skip-existing', action='store_true',
+                        help='Skip models that already have a valid checkpoint')
+    parser.add_argument('--force', action='store_true',
+                        help='Retrain even if a valid checkpoint exists (overrides --skip-existing)')
     args = parser.parse_args()
+
+    skip = args.skip_existing and not args.force
 
     models_to_train = ([args.model] if args.model
                        else [MODEL_XCEPTION, MODEL_VIT, MODEL_EFFICIENTNET])
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    logger.init(os.path.join(OUTPUT_DIR, 'training_log.txt'))
+    logger.log(f'device={DEVICE}  epochs={args.epochs}  warmup={args.warmup}  batch={BATCH_SIZE_TRAIN}')
+    logger.log(f'models: {", ".join(models_to_train)}')
 
     print(f'\nDevice: {DEVICE}')
     print(f'Epochs: {args.epochs}  (warmup={args.warmup}, fine-tune={args.epochs - args.warmup})')
 
     all_history = {}
     for mn in models_to_train:
-        hist = train_model(mn, warmup_epochs=args.warmup, total_epochs=args.epochs)
+        hist = train_model(mn, warmup_epochs=args.warmup, total_epochs=args.epochs,
+                           skip_existing=skip)
         if hist:
             all_history[mn] = hist
         gc.collect()
@@ -253,6 +326,8 @@ def main():
             json.dump(existing, f, indent=2)
         print(f'\nTraining history saved to: {TRAINING_HISTORY_PATH}')
 
+    logger.log('all models done')
+    logger.close()
     print('\nDone! Run  python main.py  to evaluate with trained weights.\n')
 
 

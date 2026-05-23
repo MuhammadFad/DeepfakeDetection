@@ -8,7 +8,7 @@ Built as an educational project comparing architecture families on binary deepfa
 
 ## What It Does
 
-- Runs **XceptionNet**, **ViT-Base/16**, and **EfficientNet-B4** on the same images simultaneously
+- Runs **XceptionNet**, **ViT-Small/16**, and **EfficientNet-B4** on the same images simultaneously
 - Generates a fully self-contained HTML report (no server needed) with:
   - Interactive accuracy comparison bar chart
   - Per-image predictions from all three models
@@ -121,30 +121,38 @@ This copies the images into `images/train/`, `images/val/`, and `images/test/`. 
 After running `download_data.py`:
 
 ```bash
-# Train all three models (10 epochs total per model)
+# Train all three models
 python train.py
 
-# Train a single model
+# Train a single model (recommended — one at a time is easier on your machine)
 python train.py --model xception
-python train.py --model vit_base_patch16_224
+python train.py --model vit_small_patch16_224
 python train.py --model efficientnet_b4
+
+# Resume after a crash — skips models that already have a valid checkpoint
+python train.py --skip-existing
+
+# Force retrain even if a checkpoint exists
+python train.py --model xception --force
 
 # Override epochs
 python train.py --epochs 20 --warmup 5
 ```
 
+A live log of every epoch is written to `output/training_log.txt` as training runs — useful for monitoring progress or diagnosing crashes.
+
 ### Two-phase fine-tuning strategy
 
 | Phase | Epochs | What's trained | Learning rate |
 |-------|--------|---------------|---------------|
-| 1 — Warmup | 3 | Classification head only | 1e-3 |
-| 2 — Fine-tune | 7 | Full network (differential LR) | Backbone: 1e-5 / Head: 1e-4 |
+| 1 — Warmup | 4 | Classification head only | 1e-3 |
+| 2 — Fine-tune | up to 16 | Full network (differential LR) | Backbone: 1e-5 / Head: 1e-4 |
 
-Phase 1 prevents the randomly-initialised head from destroying the pretrained backbone's features. Phase 2 uses CosineAnnealingLR and gradient clipping (max norm 1.0).
+Phase 1 prevents the randomly-initialised head from destroying the pretrained backbone's features. Phase 2 uses CosineAnnealingLR, gradient clipping (max norm 1.0), and early stopping (patience 5 on val loss).
 
-Best checkpoints are saved to `checkpoints/` and loaded automatically by `main.py`.
+Checkpoints are written atomically (temp file → rename) so a crash mid-save never corrupts the previous best checkpoint. Best checkpoints are saved to `checkpoints/` and loaded automatically by `main.py`.
 
-> **Memory note:** ViT-Base backpropagation is memory-intensive. Batch size is set to 4 by default (`BATCH_SIZE_TRAIN` in `config.py`). Do not increase it above 8 without a dedicated GPU.
+> **Memory note:** Batch size is set to 2 by default (`BATCH_SIZE_TRAIN` in `config.py`). On a machine with 8 GB+ RAM and no GPU this is the safe default. Do not increase above 4 without testing for out-of-memory errors.
 
 ---
 
@@ -152,13 +160,13 @@ Best checkpoints are saved to `checkpoints/` and loaded automatically by `main.p
 
 | Model | Checkpoint | Status |
 |-------|-----------|--------|
-| ViT-Small/16 | `vit_small_patch16_224_best.pth` | Not yet trained — run `python train.py --model vit_small_patch16_224` |
-| XceptionNet | `xception_best.pth` | Corrupted — retrain with `python train.py --model xception` |
-| EfficientNet-B4 | `efficientnet_b4_best.pth` | Partially trained (ep 7, val 71%) |
+| XceptionNet | `xception_best.pth` | Trained (ep 6, val 100%, test **98.7%**) |
+| ViT-Small/16 | `vit_small_patch16_224_best.pth` | Trained (ep 15, val 100%, test **100.0%**) |
+| EfficientNet-B4 | `efficientnet_b4_best.pth` | Trained (ep 8, val 78%, test **81.6%**) |
 
 Checkpoints are stored with **Git LFS**. All are tracked automatically — no manual download needed after cloning.
 
-> For best results run `python download_data.py --count 200` then `python train.py` to retrain all three models. The training pipeline uses early stopping so it won't overfit even with 20 epochs configured.
+> These results were achieved with 200 images per class (280 train / 74 val / 76 test) from the two auto-download sources. See the Limitations section for why high accuracy here does not guarantee generalisation to other fake sources.
 
 ---
 
@@ -176,14 +184,15 @@ DeepfakeDetection/
 ├── evaluation.py        # Accuracy, confusion matrix, per-class stats
 ├── explainability.py    # Grad-CAM heatmap generation (CNN + ViT)
 ├── report.py            # Self-contained HTML report with Plotly charts
+├── logger.py            # Append-only training log (output/training_log.txt)
 ├── download_data.py     # Downloads and splits a sample dataset automatically
 ├── prepare_data.py      # Splits your own dataset into train/val/test
 ├── requirements.txt     # Python dependencies
 │
 ├── checkpoints/         # Model weights — tracked with Git LFS
-│   ├── vit_base_patch16_224_best.pth   (327 MB, trained)
-│   ├── xception_best.pth               (80 MB,  needs retraining)
-│   └── efficientnet_b4_best.pth        (68 MB,  needs retraining)
+│   ├── xception_best.pth               (80 MB,  trained — test 98.7%)
+│   ├── vit_small_patch16_224_best.pth  (83 MB,  trained — test 100.0%)
+│   └── efficientnet_b4_best.pth        (68 MB,  trained — test 81.6%)
 │
 └── images/
     ├── test/            # 16 demo images included in the repo
@@ -234,7 +243,7 @@ If the heatmap highlights eye edges, skin boundaries, or hair blending artefacts
 | GPU | Not required | CUDA GPU (VRAM 6 GB+) |
 | Disk | 2 GB | 5 GB (with full training data) |
 
-The system auto-detects CUDA and falls back to CPU. CPU inference takes ~1 second per image per model. Training on CPU takes 20–40 minutes for 10 epochs at batch size 4.
+The system auto-detects CUDA and falls back to CPU. CPU inference takes ~1 second per image per model. Training one model on CPU takes roughly 10–15 minutes at batch size 2 with early stopping (typically exits well before the 20-epoch cap).
 
 ---
 
@@ -257,7 +266,20 @@ The system auto-detects CUDA and falls back to CPU. CPU inference takes ~1 secon
 
 ## Limitations
 
-- **Small training set.** The included checkpoint was trained on 50 images per class. Performance on real-world deepfakes from different sources (FaceSwap, DALL-E, Midjourney) will vary significantly.
-- **Dataset bias.** The two data sources (randomuser.me vs thispersondoesnotexist.com) differ in JPEG compression, colour temperature, and background complexity. The model may partially learn these distribution differences rather than facial manipulation signals. The Grad-CAM heatmaps help diagnose this.
-- **CPU speed.** ViT-Base/16 is slower than CNNs on CPU due to the attention mechanism's quadratic complexity over patches.
-- **Binary classification only.** The system detects Real vs Fake but does not identify the type of manipulation (face swap, expression synthesis, full synthesis, etc.).
+- **Single fake source.** `download_data.py` pulls AI-generated faces exclusively from [thispersondoesnotexist.com](https://thispersondoesnotexist.com) (StyleGAN2). Training on only one GAN source means the model partially learns *that generator's fingerprint* rather than general deepfake artefacts. It will underperform on faces from other sources (FaceSwap, DALL-E, Midjourney, Stable Diffusion). For better generalisation, supply a diverse fake set via `prepare_data.py`.
+
+- **Accuracy on the auto-downloader dataset.** With 200 images per class the included checkpoints achieve:
+
+  | Model | Test accuracy |
+  |---|---|
+  | XceptionNet | 98.7% |
+  | ViT-Small/16 | 100.0% |
+  | EfficientNet-B4 | 81.6% |
+
+  These numbers look impressive but reflect the limited two-source dataset described above — the task as posed (randomuser.me vs thispersondoesnotexist.com) may be too easy due to differences in JPEG compression and colour statistics. For results that generalise to real-world deepfakes, use `prepare_data.py` with a diverse, multi-source dataset (e.g. [FaceForensics++](https://github.com/ondyari/FaceForensics), [DFDC](https://ai.meta.com/datasets/dfdc/)).
+
+- **Dataset bias.** The two auto-download sources (randomuser.me vs thispersondoesnotexist.com) also differ in JPEG compression level, colour temperature, and background complexity. The model can exploit these distribution differences instead of genuine facial manipulation signals. Use the Grad-CAM heatmaps to diagnose this — if highlighted regions fall on backgrounds or image borders rather than faces, the model is learning the wrong signal.
+
+- **CPU speed.** ViT-Small/16 is slower than CNNs on CPU due to the attention mechanism's quadratic complexity over patches.
+
+- **Binary classification only.** The system detects Real vs Fake but does not identify the manipulation type (face swap, expression synthesis, full synthesis, etc.).

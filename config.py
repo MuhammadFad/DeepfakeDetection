@@ -31,7 +31,7 @@ VAL_RATIO   = 0.15
 TEST_RATIO  = 0.15
 
 # Training hyper-parameters
-BATCH_SIZE_TRAIN   = 4
+BATCH_SIZE_TRAIN   = 2
 WARMUP_EPOCHS      = 4      # Phase 1: train head only
 TOTAL_EPOCHS       = 20     # Phase 1 + Phase 2 combined (early stopping ends it sooner)
 EARLY_STOP_PATIENCE = 5     # Stop if val loss doesn't improve for this many epochs
