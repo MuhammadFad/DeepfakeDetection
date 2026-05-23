@@ -116,18 +116,22 @@ class GPUCachedDataset(Dataset):
         fake_paths = _scan_dir(split_dir / 'fake')
         all_samples = [(p, 0) for p in real_paths] + [(p, 1) for p in fake_paths]
 
-        tensors, labels = [], []
-        for path, label in tqdm(all_samples, desc='Caching to GPU', ncols=80):
+        n = len(all_samples)
+        labels = []
+        # Pre-allocate one contiguous CPU buffer — avoids the double-allocation
+        # that torch.stack(list_of_tensors) causes (list ~5 GB + stacked ~5 GB = OOM).
+        cpu_buf = torch.empty(n, 3, target_size, target_size, dtype=torch.float16)
+        for i, (path, label) in enumerate(tqdm(all_samples, desc='Caching to GPU', ncols=80)):
             try:
                 img = Image.open(path).convert('RGB')
-                t = transform(img).half()
+                cpu_buf[i] = transform(img).half()
             except Exception:
-                t = torch.zeros(3, target_size, target_size, dtype=torch.float16)
-            tensors.append(t)
+                cpu_buf[i] = 0.0
             labels.append(label)
 
         try:
-            self.data = torch.stack(tensors).to(device)
+            self.data = cpu_buf.to(device)
+            del cpu_buf
             self.labels = torch.tensor(labels, dtype=torch.int64).to(device)
         except torch.cuda.OutOfMemoryError:
             raise RuntimeError(
