@@ -26,7 +26,7 @@ Built as an educational project comparing architecture families on binary deepfa
 | ViT-Small/16 | Vision Transformer | 22M | 16×16 patch self-attention |
 | EfficientNet-B4 | Hybrid | 19M | Compound-scaled MobileNet |
 
-All models use **ImageNet-pretrained backbones** with fine-tuned 2-class heads. The included checkpoints were trained on the Kaggle 140k Real and Fake Faces dataset.
+All models use **ImageNet-pretrained backbones** with fine-tuned 2-class heads. The included checkpoints were trained on a 14,000-image subset of the Kaggle 140k Real and Fake Faces dataset (10,000 train / 2,000 val / 2,000 test).
 
 ---
 
@@ -279,6 +279,30 @@ CPU inference takes ~1 second per image per model. The system auto-detects CUDA 
 | scikit-learn | Confusion matrix and metrics |
 | Pillow | Image encoding |
 | tqdm | Progress bars |
+
+---
+
+## Evaluation Results & Screenshots
+
+This project was evaluated at two distinct scales. Screenshots of both runs are included in the `screenshots/` directory for reference.
+
+### Full Dataset Evaluation (Training Run)
+
+The three model checkpoints were trained and evaluated on a **14,000-image subset** of the [Kaggle 140k Real and Fake Faces](https://www.kaggle.com/datasets/xhlulu/140k-real-and-fake-faces) dataset, split as follows:
+
+| Split | Images | Purpose |
+|-------|--------|---------|
+| Train | 10,000 | Gradient updates and weight optimisation |
+| Validation | 2,000 | Early stopping and best-checkpoint selection |
+| Test | 2,000 | Final held-out accuracy and confusion matrix |
+
+Training was performed on Google Colab (T4 GPU) using `train_colab.ipynb`. The resulting accuracy metrics, confusion matrices, and training curves shown in `screenshots/full_dataset_results/` reflect performance at this scale.
+
+### Demo Evaluation (10-Image Laptop Run)
+
+As required for the course submission, a **live demo** was recorded running `main.py` on a standard student laptop (CPU only, no GPU). Due to hardware constraints, the demo test set was limited to **10 images** (5 real, 5 fake) drawn from `images/test/`. The generated HTML report — including Grad-CAM heatmaps for all three models — is shown in `screenshots/demo_results/`.
+
+> **Note:** The demo's smaller sample size means its per-model accuracy figures and confusion matrices are not statistically representative of the full evaluation. They are included solely to demonstrate the inference pipeline and Grad-CAM visualisation functionality running end-to-end on consumer hardware. For statistically meaningful results, refer to the full dataset evaluation screenshots.
 
 ---
 
