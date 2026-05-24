@@ -5,6 +5,16 @@ Classify face images as **Real** or **Fake** using three deep learning architect
 Built as an educational project comparing architecture families on binary deepfake classification.
 
 ---
+## Team
+
+| Name | Student ID |
+|------|-----------|
+| Muhammad Fahad Hussain Rana | FA23-BCS-107 |
+| Muhammad Abdullah           | FA23-BCS-091 |
+| Muhammad Ahsan Shaikh       | FA23-BCS-099 |
+
+**Course:** Information Security — CUI Lahore   
+**Instructor:** Usama Ahmed
 
 ## What It Does
 

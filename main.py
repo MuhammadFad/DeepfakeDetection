@@ -1,3 +1,9 @@
+# Deepfake Detection — CUI Lahore
+# 
+# MUHAMMAD FAHAD HUSSAIN RANA (FA23-BCS-107)
+# MUHAMMAD AHSAN SHAIKH (FA23-BCS-099)
+# MUHAMMAD ABDULLAH (FA23-BCS-091)
+
 import os
 import sys
 import logging
